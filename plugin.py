@@ -85,18 +85,7 @@ class LspPyrightPlugin(NpmClientHandler):
         workspace_folders: List[WorkspaceFolder],
         configuration: ClientConfig,
     ) -> Optional[str]:
-        # venv = cls.resolve_virtualenv(
-        #     configuration.settings, workspace_folders,
-        # )
-        # if venv is not None:
-        #     print('{}: Using virtual env "{}"'.format(cls.name(), venv))
-        #     extraPaths = configuration.settings.get("python.analysis.extraPaths") or []  # type: List[str]
-
-        # python_path = cls.resolve_python_path_from_venv(configuration.settings, workspace_folders) or "python"
-        python_path = cls.resolve_python_path_from_venv(configuration.settings, workspace_folders)
-        print('{}: Found python path "{}"'.format(cls.name(), python_path))
-        if python_path is None:
-            python_path = "python"
+        python_path = cls.resolve_python_path_from_venv(configuration.settings, workspace_folders) or "python"
         print('{}: Using python path "{}"'.format(cls.name(), python_path))
         configuration.settings.set("python.pythonPath", python_path)
         return None
@@ -256,40 +245,21 @@ class LspPyrightPlugin(NpmClientHandler):
                         )
                     )
 
-        def binary_from_venv(venv: str) -> Optional[str]:
-            if os.path.isfile(os.path.join(venv, "pyvenv.cfg")):
-                return binary_from_python_path(venv)
+        def binary_from_venv(root: str, child: str) -> Optional[str]:
+            if os.path.isfile(os.path.join(root, child, "pyvenv.cfg")):
+                return binary_from_python_path(os.path.join(root, child))
 
         # virtual environment as subfolder in project
         for file in ["venv", ".venv"]:
-            binary = binary_from_venv(os.path.join(workspace_folder, file))
+            binary = binary_from_venv(workspace_folder, file)
             if binary is not None:
                 return binary
 
         for file in os.listdir(workspace_folder):
-            if file in ["venv", ".venv"]:
+            if file in {"venv", ".venv"}:
                 continue
-            binary = binary_from_venv(os.path.join(workspace_folder, file))
+            binary = binary_from_venv(workspace_folder, file)
             if binary is not None:
                 return binary
-
-        # # virtual environment as subfolder in project
-        # for file in ["venv", ".venv"]:
-        #     maybe_venv_path = os.path.join(workspace_folder, file)
-        #     if os.path.isfile(os.path.join(maybe_venv_path, "pyvenv.cfg")):
-        #         # found a venv
-        #         binary = binary_from_python_path(maybe_venv_path)
-        #         if binary is not None:
-        #             return binary
-
-        # for file in os.listdir(workspace_folder):
-        #     if file in ["venv", ".venv"]:
-        #         continue
-        #     maybe_venv_path = os.path.join(workspace_folder, file)
-        #     if os.path.isfile(os.path.join(maybe_venv_path, "pyvenv.cfg")):
-        #         # found a venv
-        #         binary = binary_from_python_path(maybe_venv_path)
-        #         if binary is not None:
-        #             return binary
 
         return None
