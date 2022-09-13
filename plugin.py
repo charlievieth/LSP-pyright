@@ -3,6 +3,7 @@ import re
 import shlex
 import subprocess
 import sys
+from functools import lru_cache
 
 import sublime
 from LSP.plugin import DottedDict
@@ -14,6 +15,31 @@ from sublime_lib import ResourcePath
 
 if int(sublime.version()) >= 4070:
     from LSP.plugin import MarkdownLangMap
+
+
+# TODO: do we want all the "*requirements*.txt" files and are there
+# any other roots that we should check for?
+ROOT_FILES = {
+    ".git",
+    "poetry.lock",
+    "setup.py",
+    "dev-requirements.txt",
+    "requirements-dev.txt",
+    "requirements.txt",
+    "test-requirements.txt",
+}
+
+USER_HOME = os.path.normpath(os.path.expanduser("~"))
+
+
+@lru_cache
+def is_project_root(root: str) -> bool:
+    if root == USER_HOME:
+        return True
+    for name in ROOT_FILES:
+        if os.path.exists(os.path.join(root, name)):
+            return True
+    return False
 
 
 def plugin_loaded() -> None:
@@ -28,6 +54,7 @@ class LspPyrightPlugin(NpmClientHandler):
     package_name = __package__.partition(".")[0]
     server_directory = "language-server"
     server_binary_path = os.path.join(server_directory, "node_modules", "pyright", "langserver.index.js")
+    python_exe = "python" if sublime.platform() != "windows" else "python.exe"
 
     @classmethod
     def minimum_node_version(cls) -> Tuple[int, int, int]:
@@ -58,7 +85,18 @@ class LspPyrightPlugin(NpmClientHandler):
         workspace_folders: List[WorkspaceFolder],
         configuration: ClientConfig,
     ) -> Optional[str]:
-        python_path = cls.resolve_python_path_from_venv(configuration.settings, workspace_folders) or "python"
+        # venv = cls.resolve_virtualenv(
+        #     configuration.settings, workspace_folders,
+        # )
+        # if venv is not None:
+        #     print('{}: Using virtual env "{}"'.format(cls.name(), venv))
+        #     extraPaths = configuration.settings.get("python.analysis.extraPaths") or []  # type: List[str]
+
+        # python_path = cls.resolve_python_path_from_venv(configuration.settings, workspace_folders) or "python"
+        python_path = cls.resolve_python_path_from_venv(configuration.settings, workspace_folders)
+        print('{}: Found python path "{}"'.format(cls.name(), python_path))
+        if python_path is None:
+            python_path = "python"
         print('{}: Using python path "{}"'.format(cls.name(), python_path))
         configuration.settings.set("python.pythonPath", python_path)
         return None
@@ -118,6 +156,49 @@ class LspPyrightPlugin(NpmClientHandler):
         return [path for path in dep_dirs if os.path.isdir(path)]
 
     @classmethod
+    def _venv_path(cls, root: str, venv_name: str = "venv") -> Optional[str]:
+        venv = os.path.join(root, venv_name, "bin", cls.python_exe)
+        return venv if os.path.exists(venv) else None
+
+    @classmethod
+    def _find_venv(cls, root: str) -> Optional[str]:
+        if not os.path.lexists(root):
+            return None
+        while True:
+            venv = cls._venv_path(root)
+            if venv is not None:
+                return venv
+            elif is_project_root(root):
+                return None
+            else:
+                dirname = os.path.dirname(root)
+                if len(dirname) >= len(root) or dirname == USER_HOME:
+                    return None
+                root = dirname
+
+    # TODO: use this
+    # TODO: check sub-folders
+    @classmethod
+    def resolve_virtualenv(
+        cls, settings: DottedDict, folders: List[WorkspaceFolder],
+    ) -> Optional[str]:
+        """ resolve_virtualenv returns the path to the first "venv" python
+        """
+
+        # WARN: do we want this?
+        python_path = settings.get("python.pythonPath")
+        if python_path:
+            return python_path
+
+        if folders:
+            for folder in folders:
+                venv = cls._find_venv(folder.path)
+                if venv is not None:
+                    return venv
+
+        return None
+
+    @classmethod
     def resolve_python_path_from_venv(
         cls, settings: DottedDict, workspace_folders: List[WorkspaceFolder]
     ) -> Optional[str]:
@@ -175,11 +256,40 @@ class LspPyrightPlugin(NpmClientHandler):
                         )
                     )
 
+        def binary_from_venv(venv: str) -> Optional[str]:
+            if os.path.isfile(os.path.join(venv, "pyvenv.cfg")):
+                return binary_from_python_path(venv)
+
         # virtual environment as subfolder in project
+        for file in ["venv", ".venv"]:
+            binary = binary_from_venv(os.path.join(workspace_folder, file))
+            if binary is not None:
+                return binary
+
         for file in os.listdir(workspace_folder):
-            maybe_venv_path = os.path.join(workspace_folder, file)
-            if os.path.isfile(os.path.join(maybe_venv_path, "pyvenv.cfg")):
-                # found a venv
-                return binary_from_python_path(maybe_venv_path)
+            if file in ["venv", ".venv"]:
+                continue
+            binary = binary_from_venv(os.path.join(workspace_folder, file))
+            if binary is not None:
+                return binary
+
+        # # virtual environment as subfolder in project
+        # for file in ["venv", ".venv"]:
+        #     maybe_venv_path = os.path.join(workspace_folder, file)
+        #     if os.path.isfile(os.path.join(maybe_venv_path, "pyvenv.cfg")):
+        #         # found a venv
+        #         binary = binary_from_python_path(maybe_venv_path)
+        #         if binary is not None:
+        #             return binary
+
+        # for file in os.listdir(workspace_folder):
+        #     if file in ["venv", ".venv"]:
+        #         continue
+        #     maybe_venv_path = os.path.join(workspace_folder, file)
+        #     if os.path.isfile(os.path.join(maybe_venv_path, "pyvenv.cfg")):
+        #         # found a venv
+        #         binary = binary_from_python_path(maybe_venv_path)
+        #         if binary is not None:
+        #             return binary
 
         return None
